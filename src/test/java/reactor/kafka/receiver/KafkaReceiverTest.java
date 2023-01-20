@@ -28,11 +28,15 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.After;
 import org.junit.Ignore;
 import org.junit.Test;
+import org.reactivestreams.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Operators;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.kafka.AbstractKafkaTest;
@@ -47,6 +51,7 @@ import reactor.kafka.sender.TransactionManager;
 import reactor.kafka.util.ConsumerDelegate;
 import reactor.kafka.util.TestUtils;
 import reactor.test.StepVerifier;
+import reactor.util.context.Context;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
@@ -1624,4 +1629,95 @@ public class KafkaReceiverTest extends AbstractKafkaTest {
                     })
                 );
     }
+
+    @Test
+    public void hooksOnEachOperatorChangingPrefetch() throws Exception {
+        sendMessages(0, 600);
+        this.receiverOptions = this.receiverOptions.consumerProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
+
+        KafkaReceiver<Integer, String> receiver = createReceiver();
+
+        /*
+            Adding even a pass-through lifter makes prefetch/queue size to be set to 256 instead of default 1 (in receive())
+                        Without lifter everything works as expected (see logs in console)
+
+         */
+        Hooks.onEachOperator(Operators.lift(
+            (scannable, coreSubscriber) ->
+                new ThreadLocalContextCoreSubscriber(coreSubscriber)));
+
+        Disposable flux = receiver.receive()
+            .publishOn(Schedulers.newParallel("willSuspend"), 1)
+            .flatMap(it ->
+                    // delay mono for 30seconds
+                    Mono.just(it).delayElement(Duration.ofSeconds(30))
+                , /*concurrency*/ 1)
+            .subscribe();
+
+
+        await().timeout(Duration.ofMinutes(10)).until(() -> false);
+    }
+
+    @Test
+    public void withoutHooksOnEachOperatorBackpressureWorksOK() throws Exception {
+        sendMessages(0, 600);
+        this.receiverOptions = this.receiverOptions.consumerProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
+
+        KafkaReceiver<Integer, String> receiver = createReceiver();
+
+        /*
+            Without lifter everything works as expected (see logs in console)
+
+        Hooks.onEachOperator(Operators.lift(
+            (scannable, coreSubscriber) ->
+                new ThreadLocalContextCoreSubscriber(coreSubscriber)));
+         */
+
+        Disposable flux = receiver.receive()
+            .publishOn(Schedulers.newParallel("willSuspend"), 1)
+            .flatMap(it ->
+                    // delay mono for 30seconds
+                    Mono.just(it).delayElement(Duration.ofSeconds(30))
+                , /*concurrency*/ 1)
+            .subscribe();
+
+
+        await().timeout(Duration.ofMinutes(10)).until(() -> false);
+    }
 }
+
+
+final class ThreadLocalContextCoreSubscriber<U> implements CoreSubscriber<U> {
+
+    private CoreSubscriber<? super U> delegate;
+
+    public ThreadLocalContextCoreSubscriber(CoreSubscriber<? super U> delegate) {
+        this.delegate = delegate;
+    }
+
+    @Override
+    public Context currentContext() {
+        return delegate.currentContext();
+    }
+
+    @Override
+    public void onSubscribe(Subscription s) {
+        delegate.onSubscribe(s);
+    }
+
+    @Override
+    public void onNext(U u) {
+        delegate.onNext(u);
+    }
+
+    @Override
+    public void onError(Throwable t) {
+        delegate.onError(t);
+    }
+
+    @Override
+    public void onComplete() {
+        delegate.onComplete();
+    }
+}
+
