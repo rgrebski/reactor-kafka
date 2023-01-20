@@ -1649,7 +1649,7 @@ public class KafkaReceiverTest extends AbstractKafkaTest {
         Disposable flux = receiver.receive()
             .publishOn(Schedulers.newParallel("willSuspend"), 1)
             .flatMap(it ->
-                    // delay mono for 30seconds
+                    // delay mono for 30seconds to simulate long running scenario
                     Mono.just(it).delayElement(Duration.ofSeconds(30))
                 , /*concurrency*/ 1)
             .subscribe();
@@ -1676,7 +1676,7 @@ public class KafkaReceiverTest extends AbstractKafkaTest {
         Disposable flux = receiver.receive()
             .publishOn(Schedulers.newParallel("willSuspend"), 1)
             .flatMap(it ->
-                    // delay mono for 30seconds
+                    // delay mono for 30seconds to simulate long running scenario
                     Mono.just(it).delayElement(Duration.ofSeconds(30))
                 , /*concurrency*/ 1)
             .subscribe();
